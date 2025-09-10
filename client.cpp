@@ -13,6 +13,7 @@ class AuctionClient {
 private:
     int sock;
     atomic<bool> running{true};
+    atomic<bool> connected{false};
     
 public:
     bool connect(const string& ip, int port) {
@@ -24,27 +25,39 @@ public:
         if (::connect(sock, (sockaddr*)&addr, sizeof(addr)) < 0) return false;
         
         cout << "Connected to " << ip << ":" << port << endl;
+        connected = true;
         return true;
     }
     
     void start() {
+        if (!connected) {
+            cout << "Not connected to server\n";
+            return;
+        }
+        
         thread(&AuctionClient::receive, this).detach();
         
         string input;
-        while (running && getline(cin, input)) {
+        while (running && connected && getline(cin, input)) {
             if (input == "quit") break;
             input += "\n";
-            send(sock, input.c_str(), input.length(), 0);
+            int result = send(sock, input.c_str(), input.length(), 0);
+            if (result < 0) {
+                cout << "Connection lost\n";
+                break;
+            }
         }
         running = false;
     }
     
     void receive() {
         char buffer[1024];
-        while (running) {
+        while (running && connected) {
             int bytes = recv(sock, buffer, sizeof(buffer)-1, 0);
             if (bytes <= 0) {
+                cout << "\nConnection closed by server\n";
                 running = false;
+                connected = false;
                 break;
             }
             buffer[bytes] = '\0';
@@ -53,7 +66,11 @@ public:
         }
     }
     
-    ~AuctionClient() { close(sock); }
+    ~AuctionClient() { 
+        if (connected) {
+            close(sock); 
+        }
+    }
 };
 
 int main(int argc, char* argv[]) {
@@ -61,7 +78,9 @@ int main(int argc, char* argv[]) {
     int port = argc > 2 ? stoi(argv[2]) : 8080;
     
     cout << "=== AUCTION CLIENT ===\n";
-    cout << "Commands: list, start <id>, bid <id> <amount>, add <n> <d> <p>, quit\n\n";
+    cout << "You will be asked for your username and budget upon connection.\n";
+    cout << "Commands: list, start <id>, bid <id> <amount>, add <name> <price>, quit\n";
+    cout << "Note: Bidding above your budget or being outbid will disconnect you.\n\n";
     
     AuctionClient client;
     if (!client.connect(ip, port)) {
